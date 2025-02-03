@@ -1,0 +1,111 @@
+---
+title: "Visualize Data Simple Code"
+author: "TJM"
+date: "2025-02-03"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+First Packages
+```{r}
+
+library(shiny)
+library(dataRetrieval)
+library(tidyverse)
+library(DT)
+library(lubridate)
+library(ggplot2)
+
+```
+
+Next functions
+```{r}
+# Function to get USGS data
+download_usgs_data = function(site, param, start_date, end_date) {
+  data <- readNWISdata(
+    service = "iv",
+    sites = site,
+    parameterCd = param,
+    startDate = start_date,
+    endDate = end_date,
+    tz = "America/New_York"
+  )
+  
+  if (nrow(data) == 0) {
+    return(NULL)
+  }
+  
+  # Clean and format data
+  data = data %>%
+    select(datetime = dateTime, value = ends_with("_00000")) %>%
+    mutate(datetime = as.POSIXct(datetime))
+  
+  return(data)
+}
+```
+
+Shiny App
+```{r}
+# UI for the Shiny App
+ui <- fluidPage(
+  titlePanel("USGS Water Quality Dashboard"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      textInput("site", "Enter USGS Site ID:", "01463500"),
+      selectInput("param", "Select Parameter:", 
+                  choices = list(
+                    "Discharge (ft3/sec)" = "00060", 
+                    "pH" = "00400", 
+                    "Turbidity (NTU)" = "00076",
+                    "Temperature (°C)" = "00010"
+                  )),
+      dateInput("start_date", "Start Date:", value = Sys.Date() - 30),
+      dateInput("end_date", "End Date:", value = Sys.Date()),
+      actionButton("get_data", "Download Data")
+    ),
+    
+    mainPanel(
+      plotOutput("timeSeriesPlot"),
+      DTOutput("dataTable")
+    )
+  )
+)
+
+# Server logic
+server <- function(input, output) {
+  
+  data <- reactive({
+    req(input$get_data)
+    isolate({
+      df <- download_usgs_data(input$site, input$param, input$start_date, input$end_date)
+      return(df)
+    })
+  })
+  
+  output$timeSeriesPlot <- renderPlot({
+    df <- data()
+    req(df)
+    
+    ggplot(df, aes(x = datetime, y = value)) +
+      geom_line(color = "blue") +
+      labs(title = "Time-Series of Water Quality Parameter", x = "Date", y = "Value") +
+      theme_minimal()
+  })
+  
+  output$dataTable <- renderDT({
+    df <- data()
+    req(df)
+    datatable(df, options = list(pageLength = 10))
+  })
+}
+
+shinyApp(ui, server)
+
+
+
+
+
+```
+
