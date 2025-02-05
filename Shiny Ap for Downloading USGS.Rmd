@@ -1,7 +1,7 @@
 ---
-title: "Visualize Data Simple Code"
+title: "Selectable Parameters USGS"
 author: "TJM"
-date: "2025-02-03"
+date: "2025-02-05"
 output: html_document
 editor_options: 
   chunk_output_type: console
@@ -21,12 +21,17 @@ library(ggplot2)
 
 Next functions
 ```{r}
-# Function to get USGS data
-download_usgs_data = function(site, param, start_date, end_date) {
+# Function to get USGS data and clean it up
+# the service = iv means we're asking for instanteanous data
+# site has to be USGS number, look around with their mapper to find it
+# https://dashboard.waterdata.usgs.gov/app/nwd/en/
+# parameterCd is a numeric assigner for various tests, edit the selectInput() function in the next chunk to select ones you care about
+
+download_usgs_data = function(site, param_code, start_date, end_date) {
   data <- readNWISdata(
     service = "iv",
     sites = site,
-    parameterCd = param,
+    parameterCd = param_code,
     startDate = start_date,
     endDate = end_date,
     tz = "America/New_York"
@@ -38,29 +43,50 @@ download_usgs_data = function(site, param, start_date, end_date) {
   
   # Clean and format data
   data = data %>%
-    select(datetime = dateTime, value = ends_with("_00000")) %>%
+    select(datetime = dateTime, value = ends_with("_00000")) %>% 
     mutate(datetime = as.POSIXct(datetime))
   
   return(data)
 }
-```
+
+# Function to check which parameters are there for your site
+get_available_params <- function(site, start_date, end_date) {
+  data <- whatNWISdata(
+    siteNumber = site,
+    service = "iv")
+ 
+  if (is.null(data) || nrow(data) == 0) {
+    return(NULL)
+  }
+  
+  # Ensure end_date is a valid date and filter correctly
+  data <- data %>% mutate(end_date = as.Date(end_date))
+  data <- data %>% filter(end_date >= start_date)
+  
+  return(unique(data$parm_cd))
+}
+
+``` 
 
 Shiny App
 ```{r}
 # UI for the Shiny App
+# fluidPage() layout organizes inputs and output displays
+# sidebarPanel() inputs, textInput() for the USGS site ID which has to be a character in R
+# selectInput() for the water quality parameter
+# dateInput() widgets for date range
+# actionButton() to trigger data retrieval
+# mainPanel() & plotOutput() visualize the time-series data DTOutput() displays the data table interactively.
+
+
 ui <- fluidPage(
   titlePanel("USGS Water Quality Dashboard"),
   
   sidebarLayout(
     sidebarPanel(
-      textInput("site", "Enter USGS Site ID:", "01463500"),
-      selectInput("param", "Select Parameter:", 
-                  choices = list(
-                    "Discharge (ft3/sec)" = "00060", 
-                    "pH" = "00400", 
-                    "Turbidity (NTU)" = "00076",
-                    "Temperature (°C)" = "00010"
-                  )),
+      textInput("site", "Enter USGS Site ID:"),
+      actionButton("get_params", "Get Available Parameters"),
+      selectInput("param_code", "Select Parameter:", choices = NULL),
       dateInput("start_date", "Start Date:", value = Sys.Date() - 30),
       dateInput("end_date", "End Date:", value = Sys.Date()),
       actionButton("get_data", "Download Data")
@@ -73,24 +99,48 @@ ui <- fluidPage(
   )
 )
 
-# Server logic
-server <- function(input, output) {
+
+# Shiny server function processes user input, pulls in data from USGS, and updates a time-series plot and data table
+# In Shiny, the server() function defines how inputs from the UI are used to generate output
+# reactive() function ensures that data retrieval only happens when needed
+# req() requires that user input is available before running code
+# isolate() makes sure that reactive calculations only run when the button is clicked
+# renderPlot() generates plots
+# renderDT() interactive tables
+
+server <- function(input, output, session) {
+  
+  observeEvent(input$get_params, {
+    req(input$site)
+    params <- get_available_params(input$site, input$start_date, input$end_date)
+    
+    print(paste("Available parameters for site", input$site, ":", params)) 
+    
+    if (!is.null(params) && length(params) > 0) {
+      updateSelectInput(session, "param_code", choices = params)
+    } else {
+      updateSelectInput(session, "param_code", choices = NULL)
+    }
+  })
   
   data <- reactive({
-    req(input$get_data)
+    req(input$get_data, input$param_code)
     isolate({
-      df <- download_usgs_data(input$site, input$param, input$start_date, input$end_date)
+      df <- download_usgs_data(input$site, input$param_code, input$start_date, input$end_date)
       return(df)
     })
   })
   
   output$timeSeriesPlot <- renderPlot({
     df <- data()
-    req(df)
+    req(df, input$param_code)
+    
+    param_name <- readNWISpCode(input$param_code)
+    param_name = param_name$parameter_nm
     
     ggplot(df, aes(x = datetime, y = value)) +
       geom_line(color = "blue") +
-      labs(title = "Time-Series of Water Quality Parameter", x = "Date", y = "Value") +
+      labs(title = param_name, x = "Date", y = "Value") +
       theme_minimal()
   })
   
@@ -102,10 +152,4 @@ server <- function(input, output) {
 }
 
 shinyApp(ui, server)
-
-
-
-
-
 ```
-
